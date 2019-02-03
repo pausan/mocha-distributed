@@ -1,7 +1,8 @@
 # mocha-distributed
 
 The aim of this project is to provide a simple way of running distributed mocha
-tests without having to change too many lines of code.
+tests without having to change too many lines of code, nor having to decide
+what to run where.
 
 It does not matter if you run the tests in one machine as subprocesses or in
 many machines with multiple processes each.
@@ -9,8 +10,8 @@ many machines with multiple processes each.
 Hopefully you will only need to include a single line of code on each of your
 mocha files in order for them to run in parallel.
 
-Even including this like keeps your test mocha-compatible, so that you could
-run them in your local machine as if nothing was changed.
+Your test files will still be 100% compatible with mocha, so you can run them
+without any side-effects locally, using mocha, as if nothing was changed.
 
 A idea for the future is to create a mocha-compatible runner so that you don't
 even have to change source files in any way. But let's go one step at a time.
