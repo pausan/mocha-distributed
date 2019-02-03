@@ -1,0 +1,30 @@
+{
+  "name": "mocha-distributed",
+  "version": "0.8.0",
+  "description": "Run multiple mocha suites and tests in parallel, from different processes or different machines",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "mocha",
+    "expect",
+    "chai",
+    "should",
+    "unit",
+    "integration",
+    "kubernetes",
+    "docker",
+    "processes",
+    "parallel",
+    "mocha-parallel-tests",
+    "mocha.parallel",
+    "tests"
+  ],
+  "author": "Pau Sanchez",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^0.18.0",
+    "mocha": "^5.2.0"
+  }
+}
