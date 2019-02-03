@@ -18,7 +18,39 @@ even have to change source files in any way. But let's go one step at a time.
 
 ## How it works
 
-### How it works: Overview
+### Brief example
+
+First, add the following line in each of your test files you want to distribute.
+If you try to run the tests without this line, the tests will run on ALL machines,
+including the master node.
+
+  ```javascript
+  require('mocha-distributed');
+  ```
+
+Then, if you want to run mocha in one computer (e.g your dev computer):
+
+  ```bash
+  $ mocha test/**/*.js
+  ```
+
+To run mocha distributed:
+
+  - Execute as master in only one machine (imagine it is running on 1.2.3.4 IP address):
+
+    ```bash
+    $ MOCHA_DISTRIBUTED="master" mocha test/**/*.js
+    ```
+
+  - Execute runners on one or a thousand machines/processes as:
+
+    ```bash
+    $ MOCHA_DISTRIBUTED="1.2.3.4" mocha test/**/*.js
+    ```
+
+
+
+### Conceptual overview
 
 The concept is very simple, this module hooks all mocha calls and does some magic
 to allow running tests across machines without you having to decide what runs
@@ -42,7 +74,7 @@ will display the output of all tests.
 If you like to save test results, etc... run the master with the right mocha
 parameters. Using those parameters on the runners won't hurt either.
 
-### How it works: In practice
+### How to run in practice
 
 There is a magic environment variable called MOCHA_DISTRIBUTED.
 
@@ -62,37 +94,6 @@ machines are distributed around the world.
 You can also append the port to both the master and the runners, but in
 that case, the port must match.
 
-#### Brief example
-
-First, add the following line in each of your test files you want to distribute.
-
-If you try to run the tests without this line, the tests will run on ALL machines,
-including the master node.
-
-  ```javascript
-  require('mocha-distributed');
-  ```
-
-Then, if you want to run mocha in one computer (e.g your dev computer):
-
-  ```bash
-  $ mocha test/\*\*/\*.js
-  ```
-
-To run mocha distributed:
-
-  - Execute as master in only one machine (imagine it is running on 1.2.3.4 IP address):
-
-    ```bash
-    $ MOCHA_DISTRIBUTED="master" mocha test/\*\*/\*.js
-    ```
-
-  - Execute runners on one or a thousand machines/processes as:
-
-    ```bash
-    $ MOCHA_DISTRIBUTED="1.2.3.4" mocha test/\*\*/\*.js
-    ```
-
 ## Examples
 
 ### Run tests in one machine and one process
@@ -100,7 +101,7 @@ To run mocha distributed:
 Just don't use the MOCHA_DISTRIBUTED variable, or set it to empty string.
 
   ```bash
-  $ mocha test/\*\*/\*.js
+  $ mocha test/**/*.js
   ```
 
 ### Run tests in one machine, multiple processes
@@ -108,11 +109,11 @@ Just don't use the MOCHA_DISTRIBUTED variable, or set it to empty string.
 To keep things simple, do something like this:
 
   ```bash
-  $ MOCHA_DISTRIBUTED="master" mocha test/\*\*/\*.js
-  $ MOCHA_DISTRIBUTED="localhost" mocha test/\*\*/\*.js > /dev/null &
-  $ MOCHA_DISTRIBUTED="localhost" mocha test/\*\*/\*.js > /dev/null &
+  $ MOCHA_DISTRIBUTED="master" mocha test/**/*.js
+  $ MOCHA_DISTRIBUTED="localhost" mocha test/**/*.js > /dev/null &
+  $ MOCHA_DISTRIBUTED="localhost" mocha test/**/*.js > /dev/null &
   ...
-  $ MOCHA_DISTRIBUTED="localhost" mocha test/\*\*/\*.js > /dev/null &
+  $ MOCHA_DISTRIBUTED="localhost" mocha test/**/*.js > /dev/null &
   ```
 
 Run as many processes as you'd like
@@ -122,7 +123,7 @@ Run as many processes as you'd like
 On one machine do:
 
   ```bash
-  $ MOCHA_DISTRIBUTED="master" mocha test/\*\*/\*.js
+  $ MOCHA_DISTRIBUTED="master" mocha test/**/*.js
   ```
 
 You can also run some runners in that machine if you wish (see previous example).
@@ -131,10 +132,10 @@ Figure out the IP address of the master. For this example let's say the master
 IP address is 1.2.3.4. Now on the rest of machines, just do:
 
   ```bash
-  $ MOCHA_DISTRIBUTED="1.2.3.4" mocha test/\*\*/\*.js > /dev/null &
-  $ MOCHA_DISTRIBUTED="1.2.3.4" mocha test/\*\*/\*.js > /dev/null &
+  $ MOCHA_DISTRIBUTED="1.2.3.4" mocha test/**/*.js > /dev/null &
+  $ MOCHA_DISTRIBUTED="1.2.3.4" mocha test/**/*.js > /dev/null &
   ...
-  $ MOCHA_DISTRIBUTED="1.2.3.4" mocha test/\*\*/\*.js > /dev/null &
+  $ MOCHA_DISTRIBUTED="1.2.3.4" mocha test/**/*.js > /dev/null &
   ```
 
 Again, spawn as many processes as you'd like.
