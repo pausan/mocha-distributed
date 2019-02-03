@@ -1,6 +1,6 @@
 {
   "name": "mocha-distributed",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "Run multiple mocha suites and tests in parallel, from different processes or different machines",
   "main": "index.js",
   "scripts": {
@@ -8,15 +8,14 @@
   },
   "keywords": [
     "mocha",
-    "expect",
+    "parallel",
+    "parallel tests",
+    "unit tests",
+    "integration tests",
+    "pipelines",
     "chai",
-    "should",
-    "unit",
-    "integration",
     "kubernetes",
     "docker",
-    "processes",
-    "parallel",
     "mocha-parallel-tests",
     "mocha.parallel",
     "tests"
