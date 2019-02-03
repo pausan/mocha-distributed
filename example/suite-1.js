@@ -1,4 +1,5 @@
 const util = require('./util.js');
+const { expect } = require('chai');
 
 // require('mocha-distributed')
 require('../index.js');
@@ -16,7 +17,7 @@ describe ('suite-1-async', async function () {
 
   it ('test-1.3-fail', async function () {
     await util.sleep(0.25);
-    throw 'test-1.3 fails :p';
+    expect (false).to.be.true;
   });
 });
 

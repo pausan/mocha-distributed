@@ -8,6 +8,16 @@ const querystring = require('querystring');
 const constants = require('./constants.js');
 
 let g_testsPerRunner = new Map();
+let g_testEventEmitter = null;
+
+// -----------------------------------------------------------------------------
+// setEventEmitter
+//
+// To communicate with the mocha bindings
+// -----------------------------------------------------------------------------
+function setEventEmitter (testEventEmitter) {
+  g_testEventEmitter = testEventEmitter;
+}
 
 // -----------------------------------------------------------------------------
 // handleRunnerShouldRun
@@ -58,11 +68,13 @@ function handleRunnerShouldRun (req, res) {
 
   // make this runner the owner of running this test
   g_testsPerRunner.set (testId, {
+    id     : testId,
     runner : runnerId,
     status : constants.TEST_STATUS_RUNNING,
     retries: 0,
     start  : Date.now(),
-    end    : false
+    end    : false,
+    error  : null
   });
 
   res.write (
@@ -95,7 +107,8 @@ function handleRunnerResult (req, res) {
     return;
   }
 
-  if (g_testsPerRunner.get(testId).runner !== runnerId) {
+  const test = g_testsPerRunner.get (testId);
+  if (test.runner !== runnerId) {
     res.write (
       JSON.stringify ({
         error : constants.ERRORS.INVALID_RUNNER_OWNERSHIP
@@ -105,13 +118,18 @@ function handleRunnerResult (req, res) {
   }
 
   let status = queryObj.status || constants.TEST_STATUS_FAILED;
-  console.log ('status', queryObj)
   if (status !== constants.TEST_STATUS_SUCCESS) {
     status = constants.TEST_STATUS_FAILED;
   }
 
-  g_testsPerRunner.get (testId).status = status;
+  test.status = status;
+  test.error  = JSON.parse(querystring.unescape (queryObj.error || 'null'));
+
   res.write ( JSON.stringify ({ 'status' : status }) );
+
+  // Emit an event-finished for given test ID, we use the ID because that
+  // should be unique.
+  g_testEventEmitter.emit (constants.EVENT_FINISHED + ':' + testId, test);
 }
 
 // -----------------------------------------------------------------------------
@@ -171,5 +189,6 @@ function mainServerHandler (req, res) {
 
 
 module.exports = {
+  setEventEmitter,
   mainServerHandler
 };

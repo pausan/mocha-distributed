@@ -5,7 +5,7 @@ require('../index.js');
 
 describe ('suite-3', async function () {
   beforeEach (function () {
-    console.log ('before each');
+    // console.log ('before each');
   });
 
   it ('test-3.1', async function () {

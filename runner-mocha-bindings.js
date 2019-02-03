@@ -39,29 +39,54 @@ let g_testPath = [];
 //
 // Asks master server if the current runner should run given suite.
 //
-// Right now we only ask for suites because it seems the safest approach
+// Right now we only ask for suites because it seems the safest approach.
+//
+// Returns:
+//  - true: the caller should run the test
+//  - false: the caller should not run the test
+//  - null: connectivity issue with the master, it depends on the caller to
+//    decide what to do
 // -----------------------------------------------------------------------------
 async function askMasterIfShouldRun (testPath) {
   const testSuite = querystring.escape(testPath[0]);
-  const r = await axios.get (`http://${g_masterAddress}/runner/${g_runnerId}/should-run?test=${testSuite}`);
-  const ok = (r.data.answer === 'run');
+  try {
+    const r = await axios.get (`http://${g_masterAddress}/runner/${g_runnerId}/should-run?test=${testSuite}`);
+    const ok = (r.data.answer === 'run');
 
-  // we ask for given test, so we can save the result properly
-  // TODO: this can be removed if the server accepts runners
-  if (ok) {
-    const path = querystring.escape(testPath.join(constants.TEST_PATH_SEPARATOR));
-    const r = await axios.get (`http://${g_masterAddress}/runner/${g_runnerId}/should-run?test=${path}`);
+    // we ask for given test, so we can save the result properly
+    // TODO: this can be removed if the server accepts runners
+    if (ok) {
+      const path = querystring.escape(testPath.join(constants.TEST_PATH_SEPARATOR));
+      const r = await axios.get (`http://${g_masterAddress}/runner/${g_runnerId}/should-run?test=${path}`);
+    }
+    return ok;
+  }
+  catch (e) {
+    // ignore connection errors
+    // the master could have died because it already finished
   }
 
-  return ok;
+  // skip (should not run) if there is any kind of error with master
+  return null;
 }
 
 // -----------------------------------------------------------------------------
 // sendTestResultToMaster
 // -----------------------------------------------------------------------------
-async function sendTestResultToMaster (testPath, status) {
+async function sendTestResultToMaster (testPath, status, error = null) {
+  // TODO: use POST
   const path = querystring.escape(testPath.join(constants.TEST_PATH_SEPARATOR));
-  const r = await axios.get (`http://${g_masterAddress}/runner/${g_runnerId}/result?test=${path}&status=${status}`);
+  let serror = querystring.escape(JSON.stringify(error || null));
+
+  try {
+    const r = await axios.get (
+      `http://${g_masterAddress}/runner/${g_runnerId}/result?test=${path}&status=${status}&error=${serror}`
+    );
+  }
+  catch (e) {
+    // ignore connection errors
+    // the master could have died because it already finished
+  }
 }
 
 // -----------------------------------------------------------------------------
@@ -102,8 +127,10 @@ async function it (title, fn) {
 
   // define our own function hook
   return g_mochaMethods.it (title, async function () {
-    if (!await askMasterIfShouldRun (testPath))
+    if (!await askMasterIfShouldRun (testPath)) {
+      this.skip();
       return;
+    }
 
     try {
       const testResult = await fn();
@@ -111,7 +138,7 @@ async function it (title, fn) {
       return testResult;
     }
     catch (e) {
-      await sendTestResultToMaster (testPath, constants.TEST_STATUS_FAILED);
+      await sendTestResultToMaster (testPath, constants.TEST_STATUS_FAILED, e);
       throw e;
     }
   });
@@ -123,14 +150,16 @@ async function it (title, fn) {
 // Method used accross all mocha hooks (before, beforeEach, after, afterEach)
 // in order to query the master server if it needs to be executed or not.
 // -----------------------------------------------------------------------------
-function execHookMochaMethod (title, orgMochaMethod, testPath) {
+function execHookMochaMethod (title, orgMochaMethod, fn) {
   g_testPath.push (title);
   const testPath = g_testPath.slice(0);
   g_testPath.pop();
 
   return orgMochaMethod (async function () {
-    if (!await askMasterIfShouldRun (testPath))
+    if (!await askMasterIfShouldRun (testPath)) {
+      this.skip();
       return;
+    }
 
     try {
       const testResult = await fn();
@@ -138,7 +167,7 @@ function execHookMochaMethod (title, orgMochaMethod, testPath) {
       return testResult;
     }
     catch (e) {
-      await sendTestResultToMaster (testPath, constants.TEST_STATUS_FAILED);
+      await sendTestResultToMaster (testPath, constants.TEST_STATUS_FAILED, e);
       throw e;
     }
   });
@@ -148,28 +177,28 @@ function execHookMochaMethod (title, orgMochaMethod, testPath) {
 // before
 // -----------------------------------------------------------------------------
 async function before (fn) {
-  return execHookMochaMethod (':before', g_mochaMethods.before, testPath);
+  return execHookMochaMethod (':before', g_mochaMethods.before, fn);
 }
 
 // -----------------------------------------------------------------------------
 // beforeEach
 // -----------------------------------------------------------------------------
 async function beforeEach (fn) {
-  return execHookMochaMethod (':beforeEach', g_mochaMethods.beforeEach, testPath);
+  return execHookMochaMethod (':beforeEach', g_mochaMethods.beforeEach, fn);
 }
 
 // -----------------------------------------------------------------------------
 // after
 // -----------------------------------------------------------------------------
 async function after (fn) {
-  return execHookMochaMethod (':after', g_mochaMethods.after, testPath);
+  return execHookMochaMethod (':after', g_mochaMethods.after, fn);
 }
 
 // -----------------------------------------------------------------------------
 // afterEach
 // -----------------------------------------------------------------------------
 async function afterEach (fn) {
-  return execHookMochaMethod (':afterEach', g_mochaMethods.after, testPath);
+  return execHookMochaMethod (':afterEach', g_mochaMethods.after, fn);
 }
 
 module.exports = {
