@@ -25,24 +25,26 @@ const runner = require('./runner.js');
 // Initialize mode & port from environment variable MOCHA_DISTRIBUTED
 const DEFAULT_PORT = 12421;
 let mode = (process.env.MOCHA_DISTRIBUTED || '').toLowerCase();
-let port = DEFAULT_PORT;
-
-if (mode.indexOf (':') >= 0) {
-  const splitted = mode.split(':');
-  mode = splitted[0];
-  port = parseInt (splitted[1], 10);
-}
+let testExecutionId = (process.env.MOCHA_DISTRIBUTED_EXECUTION_ID || '');
 
 // let's get the party started
 if (!mode) {
   // run as normal mocha
 }
 else if (mode === 'master') {
+  let port = DEFAULT_PORT;
+
+  if (mode.indexOf (':') >= 0) {
+    const splitted = mode.split(':');
+    mode = splitted[0];
+    port = parseInt (splitted[1], 10);
+  }
+
   master (port);
 }
 else {
   const masterAddress = mode;
-  runner (masterAddress, port);
+  runner (masterAddress, DEFAULT_PORT, testExecutionId);
 }
 
 // remove from cache, so it is always reinitialized

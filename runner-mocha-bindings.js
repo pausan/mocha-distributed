@@ -9,12 +9,15 @@
 // Copyright(c) 2019 Pau Sanchez - MIT License
 // -----------------------------------------------------------------------------
 const axios = require('axios');
+const redis = require('redis');
 const querystring = require('querystring');
 const crypto = require('crypto');
 
 const constants = require('./constants.js');
 
+let g_initialized = false;
 let g_masterAddress = null;
+let g_testExecutionId = ''; // to differentiate different executions (in redis)
 
 // Generate a unique random id for this runner (with almost 100% certainty
 // to be different on any machine/environment).
@@ -30,16 +33,60 @@ let g_mochaMethods = {
   afterEach  : global.afterEach || null
 };
 
-
 // contains the actual test path such as suite.title > suite.title > it.title
 let g_testPath = [];
 
 // -----------------------------------------------------------------------------
-// askMasterIfShouldRun
+// _redisSet(key, value, expirationTimeInSeconds)
+//
+// Saves given value to a redis database
+//
+// NOTE: it might seem that all these connects and sets and quits are a waste,
+//       and they kind of are, but it is the simplest way to avoid having to
+//       deal with all sort of scenarios
+// -----------------------------------------------------------------------------
+async function _redisSet(key, value, expirationTimeInSeconds) {
+  const rd = redis.createClient({ url: g_masterAddress})
+  rd.on('error', (err) => {
+    console.log('Redis Client Error', err)
+    console.log('Closing application!')
+    process.exit(-1)
+  })
+
+  await rd.connect();
+  const result = await rd.setEx(key, expirationTimeInSeconds, JSON.stringify(value, null, 2))
+  await rd.quit();
+  return result
+}
+
+// -----------------------------------------------------------------------------
+// _redisGet(key)
+//
+// Returns a value from redis database
+//
+// NOTE: see _redisGet
+// -----------------------------------------------------------------------------
+async function _redisGet(key) {
+  const rd = redis.createClient({ url: g_masterAddress})
+  rd.on('error', (err) => {
+    console.log('Redis Client Error', err)
+    console.log('Closing application!')
+    process.exit(-1)
+  })
+
+  await rd.connect()
+  const value = await rd.get (key)
+  await rd.quit()
+
+  return value === null ? null : JSON.parse(value)
+}
+
+// -----------------------------------------------------------------------------
+// customHttpMasterAskIfTestShouldRun
 //
 // Asks master server if the current runner should run given suite.
 //
-// Right now we only ask for suites because it seems the safest approach.
+// TODO: Right now we only ask for suites because it seems the safest approach.
 //
 // Returns:
 //  - true: the caller should run the test
@@ -47,7 +94,7 @@ let g_testPath = [];
 //  - null: connectivity issue with the master, it depends on the caller to
 //    decide what to do
 // -----------------------------------------------------------------------------
-async function askMasterIfShouldRun (testPath) {
+async function customHttpMasterAskIfTestShouldRun (testPath) {
   const testSuite = querystring.escape(testPath[0]);
   try {
     const r = await axios.get (`http://${g_masterAddress}/runner/${g_runnerId}/should-run?test=${testSuite}`);
@@ -71,9 +118,9 @@ async function askMasterIfShouldRun (testPath) {
 }
 
 // -----------------------------------------------------------------------------
-// sendTestResultToMaster
+// customHttpMasterSendTestResult
 // -----------------------------------------------------------------------------
-async function sendTestResultToMaster (testPath, status, error = null) {
+async function customHttpMasterSendTestResult (testPath, status, error) {
   // TODO: use POST
   const path = querystring.escape(testPath.join(constants.TEST_PATH_SEPARATOR));
   let serror = querystring.escape(JSON.stringify(error || null));
@@ -90,12 +137,114 @@ async function sendTestResultToMaster (testPath, status, error = null) {
 }
 
 // -----------------------------------------------------------------------------
+// redisAskIfTestShouldRun
+//
+// TODO: Right now we only ask for suites because it seems the safest approach.
+//
+// Returns:
+//  - true: the caller should run the test
+//  - false: the caller should not run the test
+//  - null: connectivity issue with the master, it depends on the caller to
+//    decide what to do
+// -----------------------------------------------------------------------------
+async function redisAskIfTestShouldRun(testPath) {
+  // TODO: use test path instead of key, but then deal with before/beforeEach/...
+  const testSuite = querystring.escape(testPath[0]);
+
+  const testKey = `${g_testExecutionId}_${testSuite}`
+  const result = await _redisGet(testKey)
+
+  return (result === null) || (g_runnerId === result.runnerId)
+}
+
+// -----------------------------------------------------------------------------
+// redisSendTestResult
+// -----------------------------------------------------------------------------
+async function redisSendTestResult (testPath, status, error) {
+  //console.log ("send path:", testPath)
+  // TODO: use test path instead of key
+  const testSuite = querystring.escape(testPath[0]);
+
+  try {
+    const _24h = 24*3600
+    const testKey = testSuite
+    const testResult = {
+      runnerId : g_runnerId,
+      test : testPath,
+      status : status,
+      error : error
+    }
+
+    await _redisSet(`${g_testExecutionId}_${testKey}`, testResult, _24h)
+  }
+  catch (e) {
+    console.log ("ERROR:", e)
+    // ignore connection errors
+    // the master could have died because it already finished
+  }
+}
+
+// -----------------------------------------------------------------------------
+// askIfTestShouldRun
+//
+// Asks master server if the current runner should run given suite.
+//
+// Right now we only ask for suites because it seems the safest approach.
+//
+// Returns:
+//  - true: the caller should run the test
+//  - false: the caller should not run the test
+//  - null: connectivity issue with the master, it depends on the caller to
+//    decide what to do
+// -----------------------------------------------------------------------------
+async function askIfTestShouldRun (testPath) {
+  if(isRedisUrl(g_masterAddress)) {
+    return redisAskIfTestShouldRun(testPath)
+  }
+
+  return customHttpMasterAskIfTestShouldRun(testPath)
+}
+
+// -----------------------------------------------------------------------------
+// sendTestResultToMaster
+// -----------------------------------------------------------------------------
+async function sendTestResultToMaster (testPath, status, error = null) {
+  if(isRedisUrl(g_masterAddress)) {
+    return redisSendTestResult(testPath, status, error)
+  }
+  return customHttpMasterSendTestResult(testPath, status, error)
+}
+
+// -----------------------------------------------------------------------------
+// isRedisUrl
+// -----------------------------------------------------------------------------
+function isRedisUrl(url) {
+  return /^rediss?:\/\/.*$/i.test(url)
+}
+
+// -----------------------------------------------------------------------------
 // init
 //
 // Initialize this module
+//
+// IMPORTANT: only the first call to init will initialize the module!
 // -----------------------------------------------------------------------------
-function init (masterAddress){
-  g_masterAddress = masterAddress;
+function init (masterAddress, defaultPort, testExecutionId) {
+  if (g_initialized)
+    return;
+
+  g_initialized = true
+  g_testExecutionId = testExecutionId;
+
+  if (isRedisUrl(masterAddress)) {
+    g_masterAddress = masterAddress;
+  }
+  else if (masterAddress.includes (':')) {
+    g_masterAddress = masterAddress;
+  }
+  else {
+    g_masterAddress = `${masterAddress}:${defaultPort}`;
+  }
 }
 
 // -----------------------------------------------------------------------------
@@ -127,7 +276,7 @@ async function it (title, fn) {
 
   // define our own function hook
   return g_mochaMethods.it (title, async function () {
-    if (!await askMasterIfShouldRun (testPath)) {
+    if (!await askIfTestShouldRun (testPath)) {
       this.skip();
       return;
     }
@@ -156,7 +305,7 @@ function execHookMochaMethod (title, orgMochaMethod, fn) {
   g_testPath.pop();
 
   return orgMochaMethod (async function () {
-    if (!await askMasterIfShouldRun (testPath)) {
+    if (!await askIfTestShouldRun (testPath)) {
       this.skip();
       return;
     }

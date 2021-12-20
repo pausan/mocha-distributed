@@ -5,8 +5,8 @@
 // -----------------------------------------------------------------------------
 const runnerMochaBindings = require ('./runner-mocha-bindings.js');
 
-function runner (masterAddress, port) {
-  runnerMochaBindings.init (masterAddress + ':' + port);
+function runner (masterAddress, defaultPort, testUniqueId) {
+  runnerMochaBindings.init (masterAddress, defaultPort, testUniqueId);
 
   // hook all mocha methods
   global.describe   = runnerMochaBindings.describe;

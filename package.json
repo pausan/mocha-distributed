@@ -27,7 +27,8 @@
   "author": "Pau Sanchez",
   "license": "MIT",
   "dependencies": {
-    "axios": "^0.24.0"
+    "axios": "^0.24.0",
+    "redis": "^4.0.1"
   },
   "devDependencies": {
     "chai": "^4.2.0",
