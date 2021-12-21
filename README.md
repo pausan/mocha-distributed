@@ -1,92 +1,206 @@
 # mocha-distributed
 
 The aim of this project is to provide a simple way of running distributed mocha
-tests without having to change too many lines of code, nor having to decide
-what to run where.
+tests without having to change any line of code, nor having to decide
+what to run where. Tests spread automatically according to the nodes you have.
+
+The concept is very simple, basically you spawn as many runners as you wish
+on as many nodes as you wish, and each node decides whether they should run
+a test or the test has already been executed or is being executed somewhere
+else.
 
 It does not matter if you run the tests in one machine as subprocesses or in
 many machines with multiple processes each.
 
-Hopefully you will only need to include a single line of code on each of your
-mocha files in order for them to run in parallel.
+Because you don't need to change a single line of code, you can still develop
+locally running mocha as usual.
 
-Your test files will still be 100% compatible with mocha, so you can run them
-without any side-effects locally, using mocha, as if nothing was changed.
+## Quick start
 
-A idea for the future is to create a mocha-compatible runner so that you don't
-even have to change source files in any way. But let's go one step at a time.
-
-## How it works
-
-### Quick start: all modes
-
-First, add the following line in each of the test files you want to distribute
-the test load.
-
-If you try to run the tests without this line, the tests will run on ALL machines
-where you are running mocha.
-
-  ```javascript
-  require('mocha-distributed');
-  ```
-
-If you want to run mocha in one computer (e.g your dev computer), run:
+You don't need to change a single line of code on your tests, this project uses
+mocha hooks in order to work, so the only thing you'll need to do in preparation
+is:
 
   ```bash
-  $ mocha test/**/*.js
+  $ npm install -s mocha-distributed
   ```
 
-In this mode, nothing changes. Mocha will run as usual.
+Make sure you have a redis running somewhere with IP visibility from the machine
+or machines where you want to run the tests on. 
 
-### Quick start: standalone
+Finally, on each of the runners just run:
 
-To run mocha distributed:
+  ```bash
+    $ export MOCHA_DISTRIBUTED_EXECUTION_ID="execution__2021-01-01__20:10" 
+    $ export MOCHA_DISTRIBUTED="redis://redis.address" 
+    $ mocha --require mocha-distributed test/**/*.js
+  ```
 
-  - Execute as master in only one machine (imagine it is running on 1.2.3.4 IP address):
+There are several environment variables that allow you to control the behaviour
+of distributed tests, but this is the simplest way to launch them.
 
-    ```bash
-    $ MOCHA_DISTRIBUTED="master" mocha test/**/*.js
-    ```
+MOCHA_DISTRIBUTED is the one holding the redis address, this is the only 
+requirement to make mocha-distributed work.
 
-  - Execute runners on one or a thousand machines/processes as:
+MOCHA_DISTRIBUTED_EXECUTION_ID is the other variable you want to pay attention
+to. Make sure you use a different value for each group of runners every time
+you launch a test. This variable is what makes possible to make a runner know
+whether a test has already been executed or not by other of their peers.
 
-    ```bash
-    $ MOCHA_DISTRIBUTED="1.2.3.4" mocha test/**/*.js
-    ```
+## Environment Variables
 
-### Quick start: redis
+  - **MOCHA_DISTRIBUTED** (required)
 
-You can use redis as intermediary server to keep track of test execution,
-which in most scenarios might be more appealing and simpler to use since it 
-might have a fixed IP.
+    Right now this variable is the one used to specify the node that will hold
+    information about tests being run. This project only supports redis right
+    now. This variable can take the form:
+    
+      redis[s]://[[username][:password]@][host][:port]
 
-If you plan to use redis, you need to setup the following environment variable
-when launching the tests:
+    Please make sure it has visibility to the desired redis server.
 
-    MOCHA_DISTRIBUTED="redis://1.2.3.4"
-    MOCHA_DISTRIBUTED_EXECUTION_ID="a5ce4d8a-5b06-4ec8-aea2-37d7e4b2ffe1"
+  - **MOCHA_DISTRIBUTED_EXECUTION_ID** (required)
 
-Use a connection string in the format: redis[s]://[[username][:password]@][host][:port]
+    Make sure this value is different every time you launch your tests. You can
+    use any string here, but it should be different across test executions or
+    your tests will just be skipped after the second execution.
 
-Execution ID is used in order to differentiate different runs of the same tests
-among parallel executions. If you launch 10 instances and you want tests to
-be distributed among them, all need to have the same value for this variable.
+    Execution ID is used in order to differentiate different runs of the same
+    tests among parallel executions. If you launch 10 instances and you want
+    tests to be distributed among them, all need to have the same value for this
+    variable, otherwise each of them will run all the tests on its own.
 
-My recommendation is to use a random value, like a uuid or if you are launching
-a parallel job in kubernetes, use the job id.
+    Reusing this variable in different executions will cause your tests to be
+    skipped.
 
-There is no master with redis (in a way, redis is the master), so all runners
-should be launched the same way, whether you want to launch one runner, ten
-or a thousand. Just make sure you use the same execution ID across them.
+    Use a random uuid or other random value, a kubernetes job_name, your 
+    build system job id, ...
+
+  - **MOCHA_DISTRIBUTED_GRANULARITY** = test
+  
+    - test (default)
+      Potentially all tests can be executed by any runner in any order. This
+      is the default, but if you have trouble running your tests in parallel
+      please use "suite" instead
+
+    - suite (safest)
+
+      Launch all tests from the same suite in the same runner. This prevents
+      some parallelization errors if your tests are not prepared for full
+      paralelization.
+
+  - **MOCHA_DISTRIBUTED_RUNNER_ID** = random-id
+
+    By default this value is initialized automatically with a different random
+    string in each machine, BUT you can override this in case you need it for
+    whatever reason, although in theory you probably shouldn't.
+
+  - **MOCHA_DISTRIBUTED_EXPIRATION_TIME** = 86400
+
+    Configures to how long the data is kept in redis before it expires (in 
+    seconds). The amount of data in redis is minimal, so you probably don't want
+    to play with it.
+
+    It might be helpful to increase it though, if you want to build some sort of
+    reporting on top of it, because you can directly explore test results in
+    redis. See Tests results in Redis for more info.
+
+
+  - **MOCHA_DISTRIBUTED_VERBOSE** = false
+    - false (default)
+      Avoid printing verbose information
+
+    - true
+      Prints some extra information about the variables, the server, ...
+      that might be useful for debugging issues and/or informational.
+
+## Reading test results from Redis
+
+All runners write the test result in JSON format in a specific redis list.
+
+The list is basically the execution ID from the variable 
+MOCHA_DISTRIBUTED_EXECUTION_ID concatenated to ':test_result'
+
+For example, if you are using: MOCHA_DISTRIBUTED_EXECUTION_ID="abcdefg"
+
+Then the key you should look at in redis will be "abcdefg:test_result"
+
+You can access this list and explore the result of all tests. Each item
+on the list will contain information about the test suite, test id, ...
+test name, if it timed out or not, duration of the test, result of the test,
+if there were any errors, ... all that info is extracted from mocha itself.
+
+You will see something like this on each of the items of the list:
+
+  ```json
+  {
+    "id": [
+      "suite-1-async",
+      "test-1.1-async"
+    ],
+    "type": "test",
+    "title": "test-1.1-async",
+    "timedOut": false,
+    "duration": 502,
+    "file": "/home/psanchez/github/mocha-distributed/example/suite-1.js",
+    "state": "passed",
+    "speed": "slow",
+    "err": 0
+  }```
+
+The JSON formatting will differ since it is saved in a single line.
+
+Apart of test_result you can also access passed_count and failed_count
+
+## Examples
+
+### Environment-agnostic
+
+Make sure at least the following variables are set:
+
+  ```bash
+  MOCHA_DISTRIBUTED="redis://1.2.3.4"
+  MOCHA_DISTRIBUTED_EXECUTION_ID="a5ce4d8a-5b06-4ec8-aea2-37d7e4b2ffe1"
+  ```
+
+Again, execution ID should be a different random number each time you want to
+launch tests in parallel.
 
 Example:
 
-    ```bash
-    $ export MOCHA_DISTRIBUTED_EXECUTION_ID="a5ce4d8a-5b06-4ec8-aea2-37d7e4b2ffe1"
-    $ export MOCHA_DISTRIBUTED="redis://1.2.3.4"
-    $ mocha test/**/*.js
-    ```
-    
+  ```bash
+  $ mocha --require mocha-distributed test/**/*.js
+  ```
+
+Of course, this assumes you have already installed mocha-distributed.
+
+### Run tests in parallel in the same machine
+
+To keep things simple, do something like this:
+
+  ```bash
+  $ MOCHA_DISTRIBUTED_EXECUTION_ID=`uuidgen`
+  $ MOCHA_DISTRIBUTED="redis://redis-server"
+
+  $ mocha --require mocha-distributed test/**/*.js > output01.txt &
+  $ mocha --require mocha-distributed test/**/*.js > output02.txt &
+  ...
+  $ mocha --require mocha-distributed test/**/*.js > output0N.txt &
+  ```
+
+Run as many processes as you'd like.
+
+### Using kubernetes parallel jobs to launch tests
+
+If you plan to use kubernetes to launch parallel jobs, make sure the backoff 
+limit is set to 1, so it does not retry the job after it fails, and make sure
+you set execution ID to a different value each time (but common across all
+parallel executions).
+
+The easiest is to use the job ID (not the pod ID). You can do that by exposing
+pod metadata information as environment variables.
+
+See https://kubernetes.io/docs/tasks/inject-data-application/environment-variable-expose-pod-information/
 
 ### Conceptual overview
 
@@ -99,140 +213,35 @@ or more machines (this method won't care how you spawn your runners), and either
 set one of them as the master or use a redis database, and launch as many runners
 as you wish.
 
-Runners connect to the master/redis and for each suite they ask whether they are
-the 'owners' to run the tests on that suite or not. If they are, they run it.
-If they are not, they just skip the tests and continue running the next suite.
+Each runners connects to the redis instance and for each suite or test,
+depending on the granularity, they ask whether they are the 'owners' to run the
+tests on that suite or not. If they are, they run it. If they are not, they just
+skip the tests and continue running the next suite/tests.
 
-For simplicity this is all granularity you'll get for now. If you need two
-suites to run one after another on the same machine, then create a suite
-that encloses those.
+### Caveats
 
-#### Master mode caveats
+When running with redis, all tests are executed by independent runners, which
+means you need to take a look at the output of all the runners and see which
+ones were skipped and which ones were executed for you to see if some of those
+executed failed.
 
-When running with a master, all test results (with error information) are sent
-to that master, and the master will display the output of all tests.
-
-If you like to save test results, etc... run the master with the right mocha
-parameters. Using those parameters on the runners won't hurt either.
-
-#### Redis mode caveats
-
-When running with redis, all tests are executed by the runners, and those tests
-are not gathered anywhere, so you need to look at the output of all the runners
-and see which ones were skipped and which ones were executed for you to see
-if some of those executed failed.
-
-### How to run in practice
-
-There is a magic environment variable called MOCHA_DISTRIBUTED.
-
-When unset or empty, this module does nothing at all. Mocha runs normally,
-as if you would have not installed this module.
-
-When set to the special keyword 'master', the mocha will automatically create
-an HTTP server and listen to other processes or machines to connect to it and
-ask/inform about running the tests.
-
-For the runners, you would need to set MOCHA_DISTRIBUTED variable with the IP
-of the master computer that is running the test. If you are running all the
-tests in multiple processes you can set it to 127.0.0.1, otherwise it should
-be the IP of that machine in your private network, or the public IP if the
-machines are distributed around the world.
-
-You can also append the port to both the master and the runners, but in
-that case, the port must match.
-
-## Examples
-
-### Run tests in one machine and one process
-
-Just don't use the MOCHA_DISTRIBUTED variable, or set it to empty string.
-
-  ```bash
-  $ mocha test/**/*.js
-  ```
-
-### Run tests in one machine, multiple processes, using master mode
-
-To keep things simple, do something like this:
-
-  ```bash
-  $ MOCHA_DISTRIBUTED="master" mocha test/**/*.js
-  $ MOCHA_DISTRIBUTED="localhost" mocha test/**/*.js > /dev/null &
-  $ MOCHA_DISTRIBUTED="localhost" mocha test/**/*.js > /dev/null &
-  ...
-  $ MOCHA_DISTRIBUTED="localhost" mocha test/**/*.js > /dev/null &
-  ```
-
-Run as many processes as you'd like
-
-### Run tests in one machine, multiple processes, with redis
-
-To keep things simple, do something like this:
-
-  ```bash
-  $ MOCHA_DISTRIBUTED_EXECUTION_ID=`uuidgen`
-  $ MOCHA_DISTRIBUTED="redis://redis-server"
-
-  $ mocha test/**/*.js > /dev/null &
-  $ mocha test/**/*.js > /dev/null &
-  ...
-  $ mocha test/**/*.js > /dev/null &
-  ```
-
-Run as many processes as you'd like
-
-### Run tests in several processes across several machines, using master mode
-
-On one machine do:
-
-  ```bash
-  $ MOCHA_DISTRIBUTED="master" mocha test/**/*.js
-  ```
-
-You can also run some runners in that machine if you wish (see previous example).
-
-Figure out the IP address of the master. For this example let's say the master
-IP address is 1.2.3.4. Now on each of machines, just do:
-
-  ```bash
-  $ MOCHA_DISTRIBUTED="1.2.3.4" mocha test/**/*.js
-  ```
-
-Again, spawn as many processes on each machine and as many machines as you'd
-like, worst-case scenario, some tests will do nothing.
-
-### Run tests in several processes across several machines, using redis mode
-
-Let's say redis server is on the IP address is 1.2.3.4, and let's say you want
-to use the unique execution id "test1234"
-
-Now on each of machines, just do:
-
-  ```bash
-  $ export MOCHA_DISTRIBUTED_EXECUTION_ID="test1234" 
-  $ export MOCHA_DISTRIBUTED="1.2.3.4"
-  $ mocha test/**/*.js
-  ```
-
-Again, spawn as many processes on each machine and as many machines as you'd
-like, worst-case scenario, some tests will do nothing.
+Also the exit code of the different mocha runners will differ. The
+ones whose tests fail, will return an error, and the ones whose tests work well
+or have been skipped will return 0.
 
 ## Build systems
 
 ### jenkins, bamboo, circle-ci, gitlab, travis...
 
-If you use jenkins, bamboo or any other build system, only one runner should
-be defined as the master. The master never runs tests, only waits.
+If you use jenkins, bamboo or any other build system, make sure
+one redis is installed somewhere and all runners can access to it.
 
-You should create more processes or launch more docker or kubernetes instances
-or spread test on several nodes... do it as you wish, but for each of the
-runners that you create, make sure they have visibility to the master (e.g
-make sure you can send a ping from all the runners to the master).
+You can create as many processes processes or launch as docker or kubernetes
+instances as you wish, but for each of the runners that you create, make sure
+they have visibility to the redis.
 
-In case you run multiple masters on the same machine, make sure you setup
-a different port each time, otherwise runner's from different projects will
-inform the wrong master.
+You can use the project name and build ID or job id as the execution ID for
+mocha-distributed. Use something unique among the builds of all your projects.
 
 ## MIT License
 

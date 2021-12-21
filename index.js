@@ -1,51 +1,157 @@
-// -----------------------------------------------------------------------------
-// index.js
-//
-// Copyright(c) 2019 Pau Sanchez - MIT License
-// -----------------------------------------------------------------------------
+const redis = require("redis");
+const crypto = require("crypto");
 
-// Three scenarios for MOCHA_DISTRIBUTED:
-//   - master (MOCHA_DISTRIBUTED = 'master[:PORT]')
-//     Runs the server as master node, waiting for connections and waiting
-//     others to run the tests. For simplicity, this node won't execute
-//     any tests, but gather the result of all of them.
-//
-//   - runner (MOCHA_DISTRIBUTED='<master-address>[:PORT]'  IP/DNS of the master node)
-//     IP/DNS of the master node (a.k.a runner), this node will get a unique
-//     name from the master, and will ask, before each suite or orphaned test
-//     if it needs to run it or not
-//
-//   - Empty or not defined
-//     Runs mocha normally, we don't redefine any variable at all.
-//     Everything will run locally, if spawned on many machines or processes
-//     tests will run on all of them as if this module did not exist.
-const master = require('./master.js');
-const runner = require('./runner.js');
+const GRANULARITY = {
+  TEST: "test",
+  SUITE: "suite",
+};
 
-// Initialize mode & port from environment variable MOCHA_DISTRIBUTED
-const DEFAULT_PORT = 12421;
-let mode = (process.env.MOCHA_DISTRIBUTED || '').toLowerCase();
-let testExecutionId = (process.env.MOCHA_DISTRIBUTED_EXECUTION_ID || '');
+// Initialize variables from environment
+const g_redisAddress = process.env.MOCHA_DISTRIBUTED || "";
+const g_testExecutionId = process.env.MOCHA_DISTRIBUTED_EXECUTION_ID || "";
+const g_expirationTime =
+  process.env.MOCHA_DISTRIBUTED_EXPIRATION_TIME || `${24 * 3600}`;
 
-// let's get the party started
-if (!mode) {
-  // run as normal mocha
+// Generate a unique random id for this runner (with almost 100% certainty
+// to be different on any machine/environment).
+const _randomRunnerBuf = Buffer.alloc(16);
+const _randomRunnerId = crypto.randomFillSync(_randomRunnerBuf).toString("hex");
+const g_runnerId = process.env.MOCHA_DISTRIBUTED_RUNNER_ID || _randomRunnerId;
+let g_granularity =
+  process.env.MOCHA_DISTRIBUTED_GRANULARITY || GRANULARITY.TEST;
+const g_mochaVerbose = process.env.MOCHA_DISTRIBUTED_VERBOSE === "true";
+
+if (g_granularity !== GRANULARITY.TEST) {
+  g_granularity = GRANULARITY.SUITE;
 }
-else if (mode === 'master') {
-  let port = DEFAULT_PORT;
 
-  if (mode.indexOf (':') >= 0) {
-    const splitted = mode.split(':');
-    mode = splitted[0];
-    port = parseInt (splitted[1], 10);
+let g_redis = null;
+
+// -----------------------------------------------------------------------------
+// getTestPath
+//
+// Returns an array with the test suites and test name from a test context
+// as found in the hooks
+//
+// Example:
+//
+//    >>> getTestPath(ctxt)
+//
+// -----------------------------------------------------------------------------
+function getTestPath(testContext) {
+  const path = [testContext.title];
+
+  while (!testContext.root && testContext.parent) {
+    testContext = testContext.parent;
+
+    if (testContext && !testContext.root) {
+      path.push(testContext.title);
+    }
   }
 
-  master (port);
-}
-else {
-  const masterAddress = mode;
-  runner (masterAddress, DEFAULT_PORT, testExecutionId);
+  return path.reverse();
 }
 
-// remove from cache, so it is always reinitialized
-delete require.cache[require.resolve('./index.js')];
+// -----------------------------------------------------------------------------
+// Initialize redis once before the tests
+// -----------------------------------------------------------------------------
+exports.mochaGlobalSetup = async function () {
+  if (g_mochaVerbose) {
+    const redisNoCredentials = g_redisAddress.replace(
+      /\/\/[^@]*@/,
+      "//***:***@"
+    );
+    console.log("---------------------------------------------------");
+    console.log(" Mocha Distributed");
+    console.log("   - Runner Id                :", g_runnerId);
+    console.log("   - Redis Address            :", redisNoCredentials);
+    console.log("   - Execution Id             :", g_testExecutionId);
+    console.log("   - Data Expiration Time     :", g_expirationTime);
+    console.log("   - Test Parallel Granularity:", g_granularity);
+    console.log("---------------------------------------------------");
+  }
+
+  if (!g_redisAddress || !g_testExecutionId) {
+    console.log (g_redisAddress, g_testExecutionId)
+    console.error(
+      "You need to set at least the following environment variables:\n" +
+        "  - MOCHA_DISTRIBUTED\n" +
+        "  - MOCHA_DISTRIBUTED_EXECUTION_ID\n"
+    );
+    process.exit(-1);
+  }
+
+  g_redis = redis.createClient({ url: g_redisAddress });
+  g_redis.on("error", (err) => {
+    console.log("Redis Client Error", err);
+    console.log("Closing application!");
+    process.exit(-1);
+  });
+  await g_redis.connect();
+};
+
+// -----------------------------------------------------------------------------
+// Quit from redis
+// -----------------------------------------------------------------------------
+exports.mochaGlobalTeardown = async function () {
+  if (g_redis) {
+    await g_redis.quit();
+  }
+};
+
+// -----------------------------------------------------------------------------
+// Hook tests
+//
+// Please note that we run skip before each test if the ownership of it has
+// already been defined by another runner.
+// -----------------------------------------------------------------------------
+exports.mochaHooks = {
+  beforeEach: async function () {
+    const testPath = getTestPath(this.currentTest);
+    const testKeyFullPath = `${g_testExecutionId}:${testPath.join(":")}`;
+    const testKeySuite = `${g_testExecutionId}:${testPath[0]}`;
+
+    const testKey =
+      g_granularity === GRANULARITY.TEST ? testKeyFullPath : testKeySuite;
+
+    // Atomically set/get the runner id associated to this test. Only the first
+    // runner to get there will set the value to its own runner id.
+    const [_, assignedRunnerId] = await g_redis
+      .multi()
+      .set(testKey, g_runnerId, { EX: g_expirationTime, NX: true })
+      .get(testKey)
+      .exec();
+
+    if (assignedRunnerId !== g_runnerId) {
+      this.currentTest.title += " (skipped by mocha_distributted)";
+      this.skip();
+    }
+  },
+  afterEach(done) {
+    const SKIPPED = "pending";
+
+    // Save all data in redis in a way it can be retrieved and aggregated
+    // easily for all test by an external reporter
+    if (this.currentTest.state !== SKIPPED) {
+      const testResult = {
+        id: getTestPath(this.currentTest),
+        type: this.currentTest.type,
+        title: this.currentTest.title,
+        timedOut: this.currentTest.timedOut,
+        duration: this.currentTest.duration,
+        file: this.currentTest.file,
+        state: this.currentTest.state,
+        speed: this.currentTest.speed,
+        err: this.currentTest.err | null,
+      };
+
+      // save as single line on purpose
+      const key = `${g_testExecutionId}:test_result`;
+      g_redis.rPush(key, JSON.stringify(testResult));
+      g_redis.expire(key, g_expirationTime);
+      g_redis.incr(`${g_testExecutionId}:${this.currentTest.state}_count`);
+    }
+
+    done();
+  },
+};
