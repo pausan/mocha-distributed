@@ -1,5 +1,12 @@
 # mocha-distributed
 
+Run mocha tests faster.
+
+Speed up your mocha tests by running them in parallel in multiple machines all
+at once without changing a single line of code. You only need a redis server.
+
+## Purpose
+
 The aim of this project is to provide a simple way of running distributed mocha
 tests without having to change any line of code, nor having to decide
 what to run where. Tests spread automatically according to the nodes you have.
@@ -12,8 +19,8 @@ else.
 It does not matter if you run the tests in one machine as subprocesses or in
 many machines with multiple processes each.
 
-Because you don't need to change a single line of code, you can still develop
-locally running mocha as usual.
+Because you don't need to change a single line of code, which means that you
+can still run mocha locally as usual.
 
 ## Quick start
 
