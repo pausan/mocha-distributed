@@ -153,7 +153,8 @@ You will see something like this on each of the items of the list:
     "state": "passed",
     "speed": "slow",
     "err": 0
-  }```
+  }
+  ```
 
 The JSON formatting will differ since it is saved in a single line.
 
@@ -243,9 +244,9 @@ or have been skipped will return 0.
 If you use jenkins, bamboo or any other build system, make sure
 one redis is installed somewhere and all runners can access to it.
 
-You can create as many processes processes or launch as docker or kubernetes
-instances as you wish, but for each of the runners that you create, make sure
-they have visibility to the redis.
+Create as many processes, nodes, dockers, kubernetes pods as you wish,
+but for each of the runners that you create, make sure each of them can connect 
+to the redis instance (e.g are in the same network).
 
 You can use the project name and build ID or job id as the execution ID for
 mocha-distributed. Use something unique among the builds of all your projects.
