@@ -145,11 +145,15 @@ exports.mochaHooks = {
         err: this.currentTest.err | null,
       };
 
-      // save as single line on purpose
+      // save results as single line on purpose
       const key = `${g_testExecutionId}:test_result`;
       g_redis.rPush(key, JSON.stringify(testResult));
       g_redis.expire(key, g_expirationTime);
-      g_redis.incr(`${g_testExecutionId}:${this.currentTest.state}_count`);
+
+      // increment passed_count/failed_count & set expiry time
+      const countKey = `${g_testExecutionId}:${this.currentTest.state}_count`
+      g_redis.incr(countKey);
+      g_redis.expire(countKey, g_expirationTime);
     }
 
     done();
