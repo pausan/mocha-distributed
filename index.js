@@ -1,3 +1,8 @@
+// -----------------------------------------------------------------------------
+// Copyright (c) 2018 Pau Sanchez
+//
+// MIT Licensed
+// -----------------------------------------------------------------------------
 const redis = require("redis");
 const crypto = require("crypto");
 
@@ -129,6 +134,7 @@ exports.mochaHooks = {
   },
   afterEach(done) {
     const SKIPPED = "pending";
+    const FAILED = "failed";
 
     // Save all data in redis in a way it can be retrieved and aggregated
     // easily for all test by an external reporter
@@ -139,10 +145,13 @@ exports.mochaHooks = {
         title: this.currentTest.title,
         timedOut: this.currentTest.timedOut,
         duration: this.currentTest.duration,
+        startTime: Date.now() - (this.currentTest.duration || 0),
+        endTime: Date.now(),
         file: this.currentTest.file,
         state: this.currentTest.state,
+        failed: this.currentTest.state === FAILED,
         speed: this.currentTest.speed,
-        err: this.currentTest.err | null,
+        err: this.currentTest.err || null,
       };
 
       // save results as single line on purpose

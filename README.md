@@ -148,9 +148,12 @@ You will see something like this on each of the items of the list:
     "type": "test",
     "title": "test-1.1-async",
     "timedOut": false,
+    "startTime": 1642705594300,
+    "endTime": 1642705594802,
     "duration": 502,
     "file": "/home/psanchez/github/mocha-distributed/example/suite-1.js",
     "state": "passed",
+    "failed": false,
     "speed": "slow",
     "err": 0
   }
@@ -158,7 +161,16 @@ You will see something like this on each of the items of the list:
 
 The JSON formatting will differ since it is saved in a single line.
 
-Apart of test_result you can also access passed_count and failed_count
+Keep in mind that:
+
+* Duration and start/end times are in milliseconds.
+* Some fields are duplicated in a way, like "state" and "failed" by design
+  because sometimes is handy to have this when reading results back.
+* You can access test_result, passed_count and failed_count in redis
+* Skipped tests are never saved in redis by design, unfortunately
+
+You might have a look at list-tests-from-redis.js for an example on how to
+query redis and list all tests.
 
 ## Examples
 
