@@ -1,7 +1,7 @@
 {
   "name": "mocha-distributed",
-  "version": "0.9.2",
-  "description": "Run multiple mocha suites and tests in parallel, from different processes or different machines",
+  "version": "0.9.3",
+  "description": "Run multiple mocha suites and tests in parallel, from different processes and different machines. Results available on a redis database.",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"

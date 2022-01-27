@@ -32,6 +32,8 @@ if (g_granularity !== GRANULARITY.TEST) {
 
 let g_redis = null;
 
+let g_capture = { stdout: null, stderr: null };
+
 // -----------------------------------------------------------------------------
 // getTestPath
 //
@@ -55,6 +57,28 @@ function getTestPath(testContext) {
   }
 
   return path.reverse();
+}
+
+// -----------------------------------------------------------------------------
+// captureStream
+// -----------------------------------------------------------------------------
+function captureStream(stream) {
+  var oldWrite = stream.write;
+  var buf = [];
+
+  stream.write = function(chunk, encoding, callback){
+    buf.push (chunk.toString()); // chunk is a String or Buffer
+    oldWrite.apply(stream, arguments);
+  }
+
+  return {
+    unhook(){
+     stream.write = oldWrite;
+    },
+    captured(){
+      return buf;
+    }
+  };
 }
 
 // -----------------------------------------------------------------------------
@@ -131,14 +155,36 @@ exports.mochaHooks = {
       this.currentTest.title += " (skipped by mocha_distributted)";
       this.skip();
     }
+    else {
+      g_capture.stdout = captureStream(process.stdout);
+      g_capture.stderr = captureStream(process.stderr);
+    }
   },
   afterEach(done) {
     const SKIPPED = "pending";
     const FAILED = "failed";
+    const PASSED = "passed";
+
+    let capturedStdout = '';
+    let capturedStderr = '';
+    if (g_capture.stdout) {
+      const stdoutArray = g_capture.stdout.captured();
+      capturedStdout = stdoutArray.join('');
+      capturedStdout = capturedStdout.replace(/\s*\u001b\[3[12]m[^\n]*\n$/g, '');
+      g_capture.stdout.unhook();
+      g_capture.stdout = null;
+    }
+
+    if (g_capture.stderr) {
+      capturedStderr = g_capture.stderr.captured().join('');
+      g_capture.stderr.unhook();
+      g_capture.stderr = null;
+    }
 
     // Save all data in redis in a way it can be retrieved and aggregated
     // easily for all test by an external reporter
     if (this.currentTest.state !== SKIPPED) {
+      const stateFixed = this.currentTest.state || (this.currentTest.timedOut ? FAILED : PASSED)
       const testResult = {
         id: getTestPath(this.currentTest),
         type: this.currentTest.type,
@@ -148,10 +194,12 @@ exports.mochaHooks = {
         startTime: Date.now() - (this.currentTest.duration || 0),
         endTime: Date.now(),
         file: this.currentTest.file,
-        state: this.currentTest.state,
-        failed: this.currentTest.state === FAILED,
+        state: stateFixed,
+        failed: stateFixed === FAILED,
         speed: this.currentTest.speed,
         err: this.currentTest.err || null,
+        stdout: capturedStdout,
+        stderr: capturedStderr
       };
 
       // save results as single line on purpose
@@ -160,7 +208,7 @@ exports.mochaHooks = {
       g_redis.expire(key, g_expirationTime);
 
       // increment passed_count/failed_count & set expiry time
-      const countKey = `${g_testExecutionId}:${this.currentTest.state}_count`
+      const countKey = `${g_testExecutionId}:${stateFixed}_count`
       g_redis.incr(countKey);
       g_redis.expire(countKey, g_expirationTime);
     }
