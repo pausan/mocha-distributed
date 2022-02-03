@@ -1,6 +1,6 @@
 {
   "name": "mocha-distributed",
-  "version": "0.9.3",
+  "version": "0.9.4",
   "description": "Run multiple mocha suites and tests in parallel, from different processes and different machines. Results available on a redis database.",
   "main": "index.js",
   "scripts": {

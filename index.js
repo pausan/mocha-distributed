@@ -193,6 +193,8 @@ exports.mochaHooks = {
         duration: this.currentTest.duration,
         startTime: Date.now() - (this.currentTest.duration || 0),
         endTime: Date.now(),
+        retryAttempt: this.currentTest._currentRetry || 0,
+        retryTotal: this.currentTest._retries || 1,
         file: this.currentTest.file,
         state: stateFixed,
         failed: stateFixed === FAILED,
