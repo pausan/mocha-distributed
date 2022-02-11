@@ -1,6 +1,6 @@
 {
   "name": "mocha-distributed",
-  "version": "0.9.4",
+  "version": "0.9.5",
   "description": "Run multiple mocha suites and tests in parallel, from different processes and different machines. Results available on a redis database.",
   "main": "index.js",
   "scripts": {
@@ -28,7 +28,7 @@
   "author": "Pau Sanchez",
   "license": "MIT",
   "dependencies": {
-    "redis": "^4.0.2"
+    "redis": "^4.0.3"
   },
   "devDependencies": {
     "chai": "^4.2.0",

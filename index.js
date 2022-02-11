@@ -66,18 +66,18 @@ function captureStream(stream) {
   var oldWrite = stream.write;
   var buf = [];
 
-  stream.write = function(chunk, encoding, callback){
-    buf.push (chunk.toString()); // chunk is a String or Buffer
+  stream.write = function (chunk, encoding, callback) {
+    buf.push(chunk.toString()); // chunk is a String or Buffer
     oldWrite.apply(stream, arguments);
-  }
+  };
 
   return {
-    unhook(){
-     stream.write = oldWrite;
+    unhook() {
+      stream.write = oldWrite;
     },
-    captured(){
+    captured() {
       return buf;
-    }
+    },
   };
 }
 
@@ -101,7 +101,7 @@ exports.mochaGlobalSetup = async function () {
   }
 
   if (!g_redisAddress || !g_testExecutionId) {
-    console.log (g_redisAddress, g_testExecutionId)
+    console.log(g_redisAddress, g_testExecutionId);
     console.error(
       "You need to set at least the following environment variables:\n" +
         "  - MOCHA_DISTRIBUTED\n" +
@@ -154,29 +154,32 @@ exports.mochaHooks = {
     if (assignedRunnerId !== g_runnerId) {
       this.currentTest.title += " (skipped by mocha_distributted)";
       this.skip();
-    }
-    else {
+    } else {
       g_capture.stdout = captureStream(process.stdout);
       g_capture.stderr = captureStream(process.stderr);
     }
   },
+
   afterEach(done) {
     const SKIPPED = "pending";
     const FAILED = "failed";
     const PASSED = "passed";
 
-    let capturedStdout = '';
-    let capturedStderr = '';
+    let capturedStdout = "";
+    let capturedStderr = "";
     if (g_capture.stdout) {
       const stdoutArray = g_capture.stdout.captured();
-      capturedStdout = stdoutArray.join('');
-      capturedStdout = capturedStdout.replace(/\s*\u001b\[3[12]m[^\n]*\n$/g, '');
+      capturedStdout = stdoutArray.join("");
+      capturedStdout = capturedStdout.replace(
+        /\s*\u001b\[3[12]m[^\n]*\n$/g,
+        ""
+      );
       g_capture.stdout.unhook();
       g_capture.stdout = null;
     }
 
     if (g_capture.stderr) {
-      capturedStderr = g_capture.stderr.captured().join('');
+      capturedStderr = g_capture.stderr.captured().join("");
       g_capture.stderr.unhook();
       g_capture.stderr = null;
     }
@@ -184,7 +187,28 @@ exports.mochaHooks = {
     // Save all data in redis in a way it can be retrieved and aggregated
     // easily for all test by an external reporter
     if (this.currentTest.state !== SKIPPED) {
-      const stateFixed = this.currentTest.state || (this.currentTest.timedOut ? FAILED : PASSED)
+      const retryAttempt = this.currentTest._currentRetry || 0;
+      const retryTotal = this.currentTest._retries || 1;
+
+      // adjust state value accounting for exceptions, timeouts & retries
+      let stateFixed = PASSED;
+      if (
+        this.currentTest.state === FAILED ||
+        this.currentTest.timedOut ||
+        (typeof this.currentTest.state === "undefined" &&
+          retryAttempt < retryTotal)
+      ) {
+        stateFixed = FAILED;
+      }
+
+      // Error objects cannot be properly serialized with stringify, thus
+      // we need to use this hack to make it look like a normal object.
+      // Hopefully this should work as well with other sort of objects
+      const err = this.currentTest.err || null;
+      const errObj = JSON.parse(
+        JSON.stringify(err, Object.getOwnPropertyNames(err || {}))
+      );
+
       const testResult = {
         id: getTestPath(this.currentTest),
         type: this.currentTest.type,
@@ -193,15 +217,15 @@ exports.mochaHooks = {
         duration: this.currentTest.duration,
         startTime: Date.now() - (this.currentTest.duration || 0),
         endTime: Date.now(),
-        retryAttempt: this.currentTest._currentRetry || 0,
-        retryTotal: this.currentTest._retries || 1,
+        retryAttempt: retryAttempt,
+        retryTotal: retryTotal,
         file: this.currentTest.file,
         state: stateFixed,
         failed: stateFixed === FAILED,
         speed: this.currentTest.speed,
-        err: this.currentTest.err || null,
+        err: errObj,
         stdout: capturedStdout,
-        stderr: capturedStderr
+        stderr: capturedStderr,
       };
 
       // save results as single line on purpose
@@ -210,7 +234,7 @@ exports.mochaHooks = {
       g_redis.expire(key, g_expirationTime);
 
       // increment passed_count/failed_count & set expiry time
-      const countKey = `${g_testExecutionId}:${stateFixed}_count`
+      const countKey = `${g_testExecutionId}:${stateFixed}_count`;
       g_redis.incr(countKey);
       g_redis.expire(countKey, g_expirationTime);
     }
