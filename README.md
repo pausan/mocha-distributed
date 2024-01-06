@@ -173,7 +173,7 @@ Keep in mind that:
 You might have a look at list-tests-from-redis.js for an example on how to
 query redis and list all tests.
 
-### Mark tests to run serially
+## Run tests serially
 
 If you'd like some of your tests to run serially you can use a magic string with
 this framework.
