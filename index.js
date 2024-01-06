@@ -15,7 +15,7 @@ const GRANULARITY = {
 const g_redisAddress = process.env.MOCHA_DISTRIBUTED || "";
 const g_testExecutionId = process.env.MOCHA_DISTRIBUTED_EXECUTION_ID || "";
 const g_expirationTime =
-  process.env.MOCHA_DISTRIBUTED_EXPIRATION_TIME || `${24 * 3600}`;
+  process.env.MOCHA_DISTRIBUTED_EXPIRATION_TIME || `${7 * 24 * 3600}`;
 
 // Generate a unique random id for this runner (with almost 100% certainty
 // to be different on any machine/environment).
@@ -57,6 +57,29 @@ function getTestPath(testContext) {
   }
 
   return path.reverse();
+}
+
+// -----------------------------------------------------------------------------
+// getSerialGranularity
+//
+// Returns the full string or the "serial string" which is whatever finds that
+// follows this regex "[serial.*]" on the string. Only first instance is
+// returned.
+//
+// This will allow serializing tests with given serial name.
+// -----------------------------------------------------------------------------
+function getSerialGranularity(testKey) {
+  // NOTE: a regular expression might be trickier to get right, since you can
+  //       have multiple instances of [serialxxxx] on the same string
+  let index = testKey.indexOf('[serial')
+  if (index === -1)
+    return testKey
+
+  let index2 = testKey.indexOf(']', index)
+  if (index2 === -1)
+    return testKey
+
+  return testKey.substring(index, index2+1)
 }
 
 // -----------------------------------------------------------------------------
@@ -137,8 +160,8 @@ exports.mochaGlobalTeardown = async function () {
 exports.mochaHooks = {
   beforeEach: async function () {
     const testPath = getTestPath(this.currentTest);
-    const testKeyFullPath = `${g_testExecutionId}:${testPath.join(":")}`;
-    const testKeySuite = `${g_testExecutionId}:${testPath[0]}`;
+    const testKeyFullPath = `${g_testExecutionId}:${getSerialGranularity(testPath.join(":"))}`;
+    const testKeySuite = `${g_testExecutionId}:${getSerialGranularity(testPath[0])}`;
 
     const testKey =
       g_granularity === GRANULARITY.TEST ? testKeyFullPath : testKeySuite;

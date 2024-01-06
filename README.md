@@ -1,6 +1,6 @@
 # mocha-distributed
 
-Run mocha tests faster.
+Run mocha tests in parallel.
 
 Speed up your mocha tests by running them in parallel in multiple machines all
 at once without changing a single line of code. You only need a redis server.
@@ -12,15 +12,16 @@ tests without having to change any line of code, nor having to decide
 what to run where. Tests spread automatically according to the nodes you have.
 
 The concept is very simple, basically you spawn as many runners as you wish
-on as many nodes as you wish, and each node decides whether they should run
+on as many nodes as you wish, and each process decides whether they should run
 a test or the test has already been executed or is being executed somewhere
 else.
 
-It does not matter if you run the tests in one machine as subprocesses or in
-many machines with multiple processes each.
+It does not matter if you run the tests in one machine in multiple processes or
+in multiple machines with multiple processes each. It will just work.
 
-Because you don't need to change a single line of code, which means that you
-can still run mocha locally as usual.
+You don't need to change a single line of code, thus, this library it allows you
+to continue developing tests as usual and launch them in parallel whenever you
+want. No strings attached.
 
 ## Quick start
 
@@ -38,7 +39,7 @@ or machines where you want to run the tests on.
 Finally, on each of the runners just run:
 
   ```bash
-    $ export MOCHA_DISTRIBUTED_EXECUTION_ID="execution__2021-01-01__20:10" 
+    $ export MOCHA_DISTRIBUTED_EXECUTION_ID="execution__2024-01-01__20:10"
     $ export MOCHA_DISTRIBUTED="redis://redis.address" 
     $ mocha --require mocha-distributed test/**/*.js
   ```
@@ -102,11 +103,11 @@ whether a test has already been executed or not by other of their peers.
     string in each machine, BUT you can override this in case you need it for
     whatever reason, although in theory you probably shouldn't.
 
-  - **MOCHA_DISTRIBUTED_EXPIRATION_TIME** = 86400
+  - **MOCHA_DISTRIBUTED_EXPIRATION_TIME** = 604800
 
     Configures to how long the data is kept in redis before it expires (in 
-    seconds). The amount of data in redis is minimal, so you probably don't want
-    to play with it.
+    seconds). 7 days is the default. The amount of data in redis is minimal,
+    so you probably don't want to play with it.
 
     It might be helpful to increase it though, if you want to build some sort of
     reporting on top of it, because you can directly explore test results in
@@ -171,6 +172,65 @@ Keep in mind that:
 
 You might have a look at list-tests-from-redis.js for an example on how to
 query redis and list all tests.
+
+### Mark tests to run serially
+
+If you'd like some of your tests to run serially you can use a magic string with
+this framework.
+
+Simply add "[serial]" or "[serial-<ID OF YOUR CHOICE>]" to the title of your
+test or test suite and all those tests will execute serially by the same runner.
+
+The important part is that the test title contains "[serial" and ends with "]"
+
+It's easier to explain with a couple of examples:
+
+The following tests, regardless of whether they are on the same file or spreaded
+in multiple files, will be executed all by the same runner one after another.
+
+Might run in parallel to other tests that don't contain the "[serial]" word,
+but will run sequentially for this group.
+
+```javascript
+it('Test id 1 [serial]', function() { /* ... */})
+it('Test id 2 [serial]', function() { /* ... */})
+it('Test id 3 [serial]', function() { /* ... */})
+it('Test id 4 [serial]', function() { /* ... */})
+```
+
+See this other example below. Again, regardless of whether the tests are on the
+same file or spreaded in multiple files, will be executed by two sets of
+runners.
+
+```javascript
+it('Test id 1 [serial-worker]', function() { /* ... */})
+it('Test id 2 [serial-worker]', function() { /* ... */})
+it('Test id 3 [serial-another worker]', function() { /* ... */})
+it('Test id 4 [serial-another worker]', function() { /* ... */})
+```
+
+Test 1 and 2 will be executed by one runner, whereas test 3 and 4 will be
+executed by another. In both cases 1 and 2 will be executed sequentially and 3
+and 4 also sequentially, but since they have different serial IDs, those two
+subgroups of tests can run in parallel (e.g 1 and 2 in parallel with 3 and 4).
+
+And now last example below:
+
+```javascript
+describe('[serial-my test id] test multiple things sequentially', function () {
+  it('Test id 1', function() { /* ... */})
+  it('Test id 2', function() { /* ... */})
+  it('Test id 3', function() { /* ... */})
+  it('Test id 4', function() { /* ... */})
+})
+```
+
+The suite contains "[serial-my test id]", but the tests don't contain any serial
+magic id. In this case, ALL those tests will run sequentially because the suite
+contains the magic word.
+
+Long story short. Add "[serial-whatever you want]" on the title but make sure
+that "whatever you want" is the same for the stuff you want to run sequentially.
 
 ## Examples
 
