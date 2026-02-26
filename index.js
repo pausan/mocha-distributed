@@ -183,7 +183,7 @@ exports.mochaHooks = {
     }
   },
 
-  afterEach(done) {
+  afterEach: async function () {
     const SKIPPED = "pending";
     const FAILED = "failed";
     const PASSED = "passed";
@@ -252,16 +252,16 @@ exports.mochaHooks = {
       };
 
       // save results as single line on purpose
-      const key = `${g_testExecutionId}:test_result`;
-      g_redis.rPush(key, JSON.stringify(testResult));
-      g_redis.expire(key, g_expirationTime);
-
-      // increment passed_count/failed_count & set expiry time
+      const resultKey = `${g_testExecutionId}:test_result`;
       const countKey = `${g_testExecutionId}:${stateFixed}_count`;
-      g_redis.incr(countKey);
-      g_redis.expire(countKey, g_expirationTime);
-    }
 
-    done();
+      await g_redis
+        .multi()
+        .rPush(resultKey, JSON.stringify(testResult))
+        .expire(resultKey, g_expirationTime)
+        .incr(countKey)
+        .expire(countKey, g_expirationTime)
+        .exec();
+    }
   },
 };
