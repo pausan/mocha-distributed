@@ -1,10 +1,10 @@
 {
   "name": "mocha-distributed",
-  "version": "0.9.6",
+  "version": "0.9.7",
   "description": "Run multiple mocha suites and tests in parallel, from different processes and different machines. Results available on a redis database.",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "mocha test/test-retry.js"
   },
   "keywords": [
     "mocha",

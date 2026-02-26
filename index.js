@@ -34,6 +34,11 @@ let g_redis = null;
 
 let g_capture = { stdout: null, stderr: null };
 
+// Cache errors from intermediate retry attempts. Mocha only sets test.err via
+// the reporter on the final EVENT_TEST_FAIL; for non-final retries it emits
+// EVENT_TEST_RETRY instead and never stores the error on the test object.
+const g_retryErrors = new Map();
+
 // -----------------------------------------------------------------------------
 // getTestPath
 //
@@ -108,6 +113,11 @@ function captureStream(stream) {
 // Initialize redis once before the tests
 // -----------------------------------------------------------------------------
 exports.mochaGlobalSetup = async function () {
+  // `this` is the Mocha Runner — store errors from non-final retry attempts
+  // so afterEach can record them (Mocha never sets test.err for those).
+  this.on('retry', (test, err) => {
+    g_retryErrors.set(test.fullTitle(), err);
+  });
   if (g_mochaVerbose) {
     const redisNoCredentials = g_redisAddress.replace(
       /\/\/[^@]*@/,
@@ -227,7 +237,10 @@ exports.mochaHooks = {
       // Error objects cannot be properly serialized with stringify, thus
       // we need to use this hack to make it look like a normal object.
       // Hopefully this should work as well with other sort of objects
-      const err = this.currentTest.err || null;
+      const err = this.currentTest.err
+        || g_retryErrors.get(this.currentTest.fullTitle())
+        || null;
+      g_retryErrors.delete(this.currentTest.fullTitle());
       const errObj = JSON.parse(
         JSON.stringify(err, Object.getOwnPropertyNames(err || {}))
       );
