@@ -178,14 +178,21 @@ exports.mochaHooks = {
 
     // Atomically set/get the runner id associated to this test. Only the first
     // runner to get there will set the value to its own runner id.
-    const [_, assignedRunnerId] = await g_redis
+    const [setResult, assignedRunnerId] = await g_redis
       .multi()
       .set(testKey, g_runnerId, { EX: g_expirationTime, NX: true })
       .get(testKey)
       .exec();
 
     if (assignedRunnerId !== g_runnerId) {
+      // Another runner owns this test — skip it
       this.currentTest.title += " (skipped by mocha_distributted)";
+      this.skip();
+    } else if (setResult === null && (this.currentTest._currentRetry || 0) === 0) {
+      // This runner owns the key but didn't just claim it, and it's not a retry.
+      // Two tests share the same title — skip the duplicate.
+      console.warn(`[mocha-distributed] WARNING: duplicate test title detected: "${testPath.join(":")}"`);
+      this.currentTest.title += " (duplicate title - skipped by mocha_distributed)";
       this.skip();
     } else {
       g_capture.stdout = captureStream(process.stdout);

@@ -9,16 +9,16 @@
 'use strict';
 
 const assert = require('assert');
-const Mocha  = require('mocha/lib/mocha');
-const Suite  = require('mocha/lib/suite');
-const Test   = require('mocha/lib/test');
+const Mocha = require('mocha/lib/mocha');
+const Suite = require('mocha/lib/suite');
+const Test = require('mocha/lib/test');
 
 // -----------------------------------------------------------------------------
 // Mock redis helpers
 // -----------------------------------------------------------------------------
 const redisResolved = require.resolve('redis');
 
-const mockMulti = (writtenResults) => () => {
+const mockMulti = (writtenResults, redisState) => () => {
   const cmds = [];
   const chain = {
     set:    (...a) => { cmds.push(['set',    ...a]); return chain; },
@@ -31,9 +31,15 @@ const mockMulti = (writtenResults) => () => {
     expire: (...a) => { cmds.push(['expire', ...a]); return chain; },
     incr:   (...a) => { cmds.push(['incr',   ...a]); return chain; },
     exec: async () => {
-      // beforeEach pipeline: SET NX + GET — this runner always wins ownership
+      // beforeEach pipeline: SET NX + GET — simulate real Redis NX behaviour
       if (cmds[0] && cmds[0][0] === 'set') {
-        return [null, process.env.MOCHA_DISTRIBUTED_RUNNER_ID];
+        const [, key, value] = cmds[0];
+        const existing = redisState.get(key);
+        if (existing === undefined) {
+          redisState.set(key, value);   // SET NX succeeds
+          return ['OK', value];
+        }
+        return [null, existing];        // SET NX fails, return existing owner
       }
       // afterEach pipeline: rPush + expire + incr + expire
       return [1, 1, 1, 1];
@@ -42,17 +48,17 @@ const mockMulti = (writtenResults) => () => {
   return chain;
 };
 
-function injectMockRedis(writtenResults) {
+function injectMockRedis(writtenResults, redisState) {
   require.cache[redisResolved] = {
     id:       redisResolved,
     filename: redisResolved,
     loaded:   true,
     exports:  {
       createClient: () => ({
-        on:      () => {},
-        connect: async () => {},
-        quit:    async () => {},
-        multi:   mockMulti(writtenResults),
+        on: () => { },
+        connect: async () => { },
+        quit: async () => { },
+        multi: mockMulti(writtenResults, redisState),
       })
     },
   };
@@ -75,11 +81,13 @@ describe('mocha-distributed', function () {
 
   describe('retry attempt recording', function () {
     let writtenResults;
+    let redisState;
     let lib;
 
     before(function () {
       writtenResults = [];
-      injectMockRedis(writtenResults);
+      redisState = new Map();
+      injectMockRedis(writtenResults, redisState);
 
       process.env.MOCHA_DISTRIBUTED              = 'redis://mock';
       process.env.MOCHA_DISTRIBUTED_EXECUTION_ID = 'test-exec-retry';
@@ -98,7 +106,7 @@ describe('mocha-distributed', function () {
 
       // Build the inner mocha instance with a flaky test that fails on
       // attempts 0 and 1, and passes on attempt 2
-      const m = new Mocha({ reporter: 'min' });
+      const m = new Mocha({ reporter: 'tap' });
       m.rootHooks(lib.mochaHooks);
       m.globalSetup([lib.mochaGlobalSetup]);
       m.globalTeardown([lib.mochaGlobalTeardown]);
