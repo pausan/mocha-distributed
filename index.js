@@ -39,6 +39,11 @@ let g_capture = { stdout: null, stderr: null };
 // EVENT_TEST_RETRY instead and never stores the error on the test object.
 const g_retryErrors = new Map();
 
+// Map to keep track of the number of times a test key full path has been seen,
+// to add a suffix and parallelize duplicated test titles in multiple runners
+const g_duplicateTestKeyFullPathCount = new Map();
+let g_lastTestKeyFullPath = null;
+
 // -----------------------------------------------------------------------------
 // getTestPath
 //
@@ -170,8 +175,25 @@ exports.mochaGlobalTeardown = async function () {
 exports.mochaHooks = {
   beforeEach: async function () {
     const testPath = getTestPath(this.currentTest);
-    const testKeyFullPath = `${g_testExecutionId}:${getSerialGranularity(testPath.join(":"))}`;
+    let testKeyFullPath = `${g_testExecutionId}:${getSerialGranularity(testPath.join(":"))}`;
     const testKeySuite = `${g_testExecutionId}:${getSerialGranularity(testPath[0])}`;
+
+    // if this is the first attempt, we need to put a suffix to be able to
+    // parallelize duplicates in multiple runners
+    if ((this.currentTest._currentRetry || 0) === 0) {
+      g_duplicateTestKeyFullPathCount.set(
+        testKeyFullPath,
+        (g_duplicateTestKeyFullPathCount.get(testKeyFullPath) || 0) + 1
+      );
+      testKeyFullPath += `:dup-${g_duplicateTestKeyFullPathCount.get(testKeyFullPath)}`;
+      g_lastTestKeyFullPath = testKeyFullPath;
+    }
+    else {
+      // ensure we use the same key for retries as the original attempt, otherwise
+      // we will screw up the distribution of tests; we use the last generated key
+      // since retries are executed sequentially
+      testKeyFullPath = g_lastTestKeyFullPath;
+    }
 
     const testKey =
       g_granularity === GRANULARITY.TEST ? testKeyFullPath : testKeySuite;

@@ -5,10 +5,10 @@ export MOCHA_DISTRIBUTED="redis://127.0.0.1"
 npm install > /dev/null 2>&1
 
 N=$1
-COMMAND="mocha --require ./index.js example/**/*.js"
+COMMAND="npx mocha --require ./index.js example/**/*.js"
 
 # cleanup tmp files
-rm tmp-*
+rm -f tmp-*
 
 echo "Spawning $N commands in parallel with Execution ID: $MOCHA_DISTRIBUTED_EXECUTION_ID"
 
