@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------------
 const redis = require("redis");
 const crypto = require("crypto");
+const { Runner } = require("mocha");
 
 const GRANULARITY = {
   TEST: "test",
@@ -33,6 +34,16 @@ if (g_granularity !== GRANULARITY.TEST) {
 let g_redis = null;
 
 let g_capture = { stdout: null, stderr: null };
+
+// Cache errors from intermediate retry attempts. Mocha only sets test.err via
+// the reporter on the final EVENT_TEST_FAIL; for non-final retries it emits
+// EVENT_TEST_RETRY instead and never stores the error on the test object.
+// We bridge that event through process so mochaGlobalSetup (which has the
+// Runner as `this`) can forward it to afterEach (which doesn't).
+const g_retryErrors = new Map();
+process.on('mocha:retry', (test, err) => {
+  g_retryErrors.set(test.fullTitle(), err);
+});
 
 // -----------------------------------------------------------------------------
 // getTestPath
@@ -108,6 +119,12 @@ function captureStream(stream) {
 // Initialize redis once before the tests
 // -----------------------------------------------------------------------------
 exports.mochaGlobalSetup = async function () {
+  // `this` is the Mocha Runner — forward retry events so afterEach can read
+  // the error from non-final retry attempts (Mocha never sets test.err for
+  // those, only for the final EVENT_TEST_FAIL via the base reporter).
+  this.on('retry', (test, err) => {
+    process.emit('mocha:retry', test, err);
+  });
   if (g_mochaVerbose) {
     const redisNoCredentials = g_redisAddress.replace(
       /\/\/[^@]*@/,
@@ -227,7 +244,10 @@ exports.mochaHooks = {
       // Error objects cannot be properly serialized with stringify, thus
       // we need to use this hack to make it look like a normal object.
       // Hopefully this should work as well with other sort of objects
-      const err = this.currentTest.err || null;
+      const err = this.currentTest.err
+        || g_retryErrors.get(this.currentTest.fullTitle())
+        || null;
+      g_retryErrors.delete(this.currentTest.fullTitle());
       const errObj = JSON.parse(
         JSON.stringify(err, Object.getOwnPropertyNames(err || {}))
       );
