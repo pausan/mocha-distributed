@@ -178,21 +178,29 @@ exports.mochaHooks = {
     let testKeyFullPath = `${g_testExecutionId}:${getSerialGranularity(testPath.join(":"))}`;
     const testKeySuite = `${g_testExecutionId}:${getSerialGranularity(testPath[0])}`;
 
-    // if this is the first attempt, we need to put a suffix to be able to
-    // parallelize duplicates in multiple runners
-    if ((this.currentTest._currentRetry || 0) === 0) {
-      g_duplicateTestKeyFullPathCount.set(
-        testKeyFullPath,
-        (g_duplicateTestKeyFullPathCount.get(testKeyFullPath) || 0) + 1
-      );
-      testKeyFullPath += `:dup-${g_duplicateTestKeyFullPathCount.get(testKeyFullPath)}`;
-      g_lastTestKeyFullPath = testKeyFullPath;
-    }
-    else {
-      // ensure we use the same key for retries as the original attempt, otherwise
-      // we will screw up the distribution of tests; we use the last generated key
-      // since retries are executed sequentially
-      testKeyFullPath = g_lastTestKeyFullPath;
+    // Serial tests intentionally collapse to a shared key (the "[serial...]"
+    // string) so that the whole group is owned by a single runner. Adding a
+    // ":dup-N" suffix would give each serial test a unique key again, breaking
+    // serialization, so we must skip the duplicate handling for them.
+    const isSerial = testPath.join(":").indexOf("[serial") !== -1;
+
+    if (!isSerial) {
+      // if this is the first attempt, we need to put a suffix to be able to
+      // parallelize duplicates in multiple runners
+      if ((this.currentTest._currentRetry || 0) === 0) {
+        g_duplicateTestKeyFullPathCount.set(
+          testKeyFullPath,
+          (g_duplicateTestKeyFullPathCount.get(testKeyFullPath) || 0) + 1
+        );
+        testKeyFullPath += `:dup-${g_duplicateTestKeyFullPathCount.get(testKeyFullPath)}`;
+        g_lastTestKeyFullPath = testKeyFullPath;
+      }
+      else {
+        // ensure we use the same key for retries as the original attempt, otherwise
+        // we will screw up the distribution of tests; we use the last generated key
+        // since retries are executed sequentially
+        testKeyFullPath = g_lastTestKeyFullPath;
+      }
     }
 
     const testKey =
