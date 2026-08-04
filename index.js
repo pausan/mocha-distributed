@@ -40,6 +40,7 @@ const g_claimExpirationTimeSec = parseInt(g_claimExpirationTime, 10) || (10 * 60
 const redisKeys = {
   testUniverse: () => `${g_testExecutionId}:test_universe`,
   doneTests: () => `${g_testExecutionId}:done_tests`,
+  runStartedAt: () => `${g_testExecutionId}:run_started_at`,
   expectedTotal: () => `${g_testExecutionId}:expected_total`,
   expectedTotalIndividual: () => `${g_testExecutionId}:expected_total_individual`,
   runnersActive: () => `${g_testExecutionId}:runners_active`,
@@ -298,6 +299,23 @@ async function publishTestUniverse() {
     .sAdd(key, Array.from(g_localTestKeys))
     .expire(key, g_expirationTimeSec)
     .exec();
+}
+
+// -----------------------------------------------------------------------------
+// publishRunStartedAt
+//
+// Stamps the wall-clock time this execution began, before any test runs and
+// before test_result (which doesn't exist until the first test completes)
+// has anything to peek at. NX so only the first runner to reach globalSetup
+// wins; every later runner's call is a harmless no-op rather than pushing
+// the timestamp forward.
+// -----------------------------------------------------------------------------
+async function publishRunStartedAt() {
+  const key = redisKeys.runStartedAt();
+  await g_redis.set(key, String(Date.now()), {
+    NX: true,
+    EX: g_expirationTimeSec,
+  });
 }
 
 // -----------------------------------------------------------------------------
@@ -1042,7 +1060,12 @@ exports.mochaGlobalSetup = async function () {
     });
   }
 
-  // Publish shared state used by the drain phase:
+  // Publish shared state used by the drain phase (and, for run_started_at,
+  // by external dashboards wanting to show a run before it has any result):
+  //   - run_started_at : wall-clock start time, NX so only the first runner
+  //                       writes it. Published first so external readers
+  //                       polling on expected_total below never observe a
+  //                       run without a start time to sort/label it by.
   //   - test_universe  : full local key set, published upfront so a test
   //                       whose every attempt is preempted before its
   //                       beforeEach fires is still discoverable as an orphan.
@@ -1052,7 +1075,8 @@ exports.mochaGlobalSetup = async function () {
   //                       per-test walk count - diagnostic only, not read
   //                       by any coordination/drain logic.
   //   - runners_active : live runner counter, INCR here / DECR at teardown.
-  // All four are best-effort -- failures shouldn't prevent tests from running.
+  // All five are best-effort -- failures shouldn't prevent tests from running.
+  try { await publishRunStartedAt();    } catch (_) {}
   try { await publishTestUniverse();    } catch (_) {}
   try { await publishExpectedTotal();   } catch (_) {}
   try { await publishIndividualExpectedTotal(); } catch (_) {}
