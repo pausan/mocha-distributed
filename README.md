@@ -113,6 +113,109 @@ whether a test has already been executed or not by other of their peers.
     reporting on top of it, because you can directly explore test results in
     redis. See Tests results in Redis for more info.
 
+    This value is also used as the **tombstone** TTL for completed tests:
+    once a test produces a result, its claim key is promoted to this TTL so
+    a replacement runner won't re-run it.
+
+  - **MOCHA_DISTRIBUTED_CLAIM_EXPIRATION_TIME** = 600
+
+    TTL (in seconds) for the in-flight claim key a runner sets when it
+    starts a test. Defaults to 10 minutes. The runner refreshes this TTL
+    every `claim_ttl / 3` seconds while the test is running, so a slow
+    test never lets its claim expire under it.
+
+    On graceful shutdown (SIGTERM / SIGINT) the runner DELs its in-flight
+    claim so a replacement pod can pick the test up immediately. On a hard
+    kill (no signal delivered) the claim auto-expires after this TTL,
+    bounding recovery time.
+
+    ### Claim key lifecycle
+
+    A test key in redis goes through three phases:
+
+    1. **In-flight** — short TTL (`MOCHA_DISTRIBUTED_CLAIM_EXPIRATION_TIME`),
+       refreshed by a keepalive while the test runs.
+    2. **Released on SIGTERM** — DEL'd, so another runner can re-claim it.
+    3. **Completed** — promoted to a tombstone with TTL
+       `MOCHA_DISTRIBUTED_EXPIRATION_TIME` (7 d default), matching the
+       result-list lifetime.
+
+    This makes the runner safe to use on preemptible / spot infrastructure.
+
+  - **MOCHA_DISTRIBUTED_DRAIN_ENABLED** = true
+
+    Controls the *drain phase* that runs after every runner finishes its
+    local test iteration. During drain, each runner:
+
+      1. computes the set of orphaned tests (SDIFF `test_universe`
+         minus `done_tests`, then filtered to keys whose in-flight
+         claim has expired) and re-runs them. `test_universe` is
+         prepopulated with every key from each runner's local pre-walk
+         at startup (in addition to the incremental SADD every
+         `beforeEach` still performs), so a test whose every attempt
+         was preempted before its `beforeEach` ever ran is still
+         discoverable as an orphan — not just tests that were
+         attempted at least once,
+      2. periodically polls until the global `done_tests` count reaches
+         `expected_total`, then exits with a canonical verdict.
+
+    The drain phase is what makes preemption resilience truly symmetric:
+    a peer runner that dies mid-test is rescued by the survivors
+    without any leader election or manifest gymnastics. Every runner
+    stays online until the shared bookkeeping is settled.
+
+    Set to `false` (or `0`) only if you know you don't need this — e.g.
+    on non-preemptible infrastructure where runners never die mid-run.
+    When disabled, the library prints a WARN banner and preserves
+    mocha's default exit code.
+
+  - **MOCHA_DISTRIBUTED_DRAIN_TIMEOUT** = 1800
+
+    Maximum wall-clock seconds any runner will spend in the drain
+    phase before giving up. Should be at least a few multiples of the
+    slowest test's execution time — the drain loop needs enough
+    headroom to notice a preempted peer, re-claim its work, and run
+    it to completion. Kubernetes Job's `activeDeadlineSeconds` should
+    generally be larger than this.
+
+  - **MOCHA_DISTRIBUTED_DRAIN_POLL_INTERVAL** = 5
+
+    Seconds between orphan-detection polls when no orphans are found.
+    Successful iterations don't wait — the loop rechecks immediately.
+    A small (±20%) jitter is applied per iteration to prevent every
+    runner from polling in lock-step.
+
+  - **MOCHA_DISTRIBUTED_MAX_RESCUES_PER_TEST** = 3
+
+    Per-test rescue budget. If a single test is picked up by the drain
+    phase this many times without ever producing a result (i.e. every
+    attempt crashed its runner), it is declared broken: exactly one
+    runner (CAS-guarded) writes a synthetic failed row for it to
+    `test_result`, bumps `failed_count`, marks it done, and the drain
+    loop can finally converge.
+
+  - **MOCHA_DISTRIBUTED_EXPECTED_TOTAL_OVERRIDE** (unset by default)
+
+    Escape hatch to hard-code the value of `expected_total` in redis,
+    bypassing the max-of-local-walks discovery. Only useful when your
+    heterogeneous runners load different subsets of the same suite —
+    a scenario this library is not designed for. If unset (the
+    recommended default), each runner publishes its local walk count
+    and the max wins.
+
+  - **Exit code contract** (produced by the drain phase)
+
+    When drain is enabled, every runner exits with a canonical global
+    verdict rather than mocha's local failCount:
+
+      - `0` — drain completed and no test failed anywhere
+      - `1` — drain completed and at least one test failed (possibly on a peer)
+      - `2` — drain timed out before all tests were accounted for
+
+    Because the verdict is derived from shared redis counters, every
+    runner independently reaches the same value — kubernetes Job
+    success is well-defined even when individual pods rescued tests
+    for each other.
 
   - **MOCHA_DISTRIBUTED_VERBOSE** = false
     - false (default)
@@ -156,7 +259,8 @@ You will see something like this on each of the items of the list:
     "state": "passed",
     "failed": false,
     "speed": "slow",
-    "err": 0
+    "err": 0,
+    "reportKey": "suite-1-async:test-1.1-async:dup-1"
   }
   ```
 
@@ -169,9 +273,72 @@ Keep in mind that:
   because sometimes is handy to have this when reading results back.
 * You can access test_result, passed_count and failed_count in redis
 * Skipped tests are never saved in redis by design, unfortunately
+* `reportKey` is the field name for this test in the collapsed `{execId}:report`
+  hash (see below) — use it directly with `HGET {execId}:report <reportKey>`
+  instead of recomputing it: the `:dup-N` suffix depends on suite-walk
+  registration order and can't be reliably reconstructed from redis data alone
+  when titles are duplicated.
 
 You might have a look at list-tests-from-redis.js for an example on how to
 query redis and list all tests.
+
+## Collapsed reports (one entry per test)
+
+In addition to `{execId}:test_result` (one LIST entry per attempt, including
+retries), mocha-distributed also maintains `{execId}:report` — a redis
+**HASH** with exactly one field per logical test, regardless of how many
+times it was retried. It's written by the same `afterEach` step that writes
+`test_result` (and by the drain-phase rescue-cap handler for orphaned tests),
+so it shares `test_result`'s TTL and, like `test_result`, never gets an entry
+for skipped tests.
+
+Each hash field's value looks like this:
+
+  ```json
+  {
+    "reportKey": "suite-1-async:test-1.1-async:dup-1",
+    "id": ["suite-1-async", "test-1.1-async"],
+    "type": "test",
+    "title": "test-1.1-async",
+    "timedOut": false,
+    "duration": 502,
+    "startTime": 1642705594300,
+    "endTime": 1642705594802,
+    "retryTotal": 1,
+    "file": "/home/psanchez/github/mocha-distributed/example/suite-1.js",
+    "state": "passed",
+    "failed": false,
+    "speed": "slow",
+    "err": null,
+    "stdout": "",
+    "stderr": "",
+    "attempts": [
+      {
+        "retryAttempt": 0,
+        "duration": 502,
+        "state": "passed",
+        "timedOut": false,
+        "err": null,
+        "stdout": "",
+        "stderr": ""
+      }
+    ]
+  }
+  ```
+
+The top-level fields (`state`, `failed`, `timedOut`, `duration`, `err`,
+`stdout`, `stderr`, `speed`, `endTime`) always reflect the **final** attempt.
+`startTime` is the **first** attempt's start, so `endTime - startTime` gives
+the total wall-clock span across every retry. `retryTotal` stays at the top
+level; the per-attempt `retryAttempt` moves into `attempts[]`, which keeps
+one entry per attempt in the order they ran.
+
+Use `HGETALL {execId}:report` to fetch every collapsed test result in one
+call, or `HGET {execId}:report <field>` for a single test. `reportKey` is
+included in the value itself (not just as the hash field name) so a row
+pulled via `HGETALL` is self-describing, and — as noted above — the same
+`reportKey` is stamped onto every `test_result` row for that test, so you can
+go from one to the other without recomputing anything.
 
 ## Run tests serially
 
@@ -305,9 +472,42 @@ means you need to take a look at the output of all the runners and see which
 ones were skipped and which ones were executed for you to see if some of those
 executed failed.
 
-Also the exit code of the different mocha runners will differ. The
-ones whose tests fail, will return an error, and the ones whose tests work well
-or have been skipped will return 0.
+Since v0.10.0, when the drain phase is enabled (the default), every runner
+exits with the same canonical verdict computed from shared redis counters
+(`0` = all pass, `1` = at least one failure, `2` = drain timed out). If you
+disable drain via `MOCHA_DISTRIBUTED_DRAIN_ENABLED=false`, the runners fall
+back to reporting only their local failCount as an exit code — which
+differs across pods and can miss failures that happened on peers.
+
+### How preemption resilience works (drain phase)
+
+Each runner lifecycle has two phases:
+
+  1. **Phase A — local iteration.** Mocha walks the suite, each `beforeEach`
+     tries to CAS-claim its test in redis, winners run the test and record
+     the result. This is the classical behaviour you get with drain disabled.
+
+  2. **Phase B — drain.** After Phase A returns, every runner stays alive
+     and cooperatively hunts for orphaned tests: keys present in
+     `test_universe` but missing from `done_tests` whose in-flight claim key
+     has expired (its owner was preempted before writing the result). Any
+     surviving runner can re-claim and re-run the orphan. `test_universe`
+     itself is seeded twice: once upfront at startup from each runner's
+     local pre-walk (covering tests that never got a single `beforeEach`
+     attempt anywhere), and incrementally on every subsequent `beforeEach`
+     attempt (covering tests added dynamically after the pre-walk, an
+     otherwise-unsupported pattern this keeps degrading gracefully).
+
+     The loop exits when the global `done_tests` count reaches
+     `expected_total` (verdict 0 or 1), or after `DRAIN_TIMEOUT` seconds
+     (verdict 2). A per-test rescue budget
+     (`MAX_RESCUES_PER_TEST`, default 3) prevents a truly broken test
+     from spinning the loop forever — once exhausted, a single runner
+     writes a synthetic failed row on its behalf and the loop can converge.
+
+The design is fully symmetric: there is no leader, no coordinator, and no
+change to your kubernetes manifest beyond making sure
+`activeDeadlineSeconds` is comfortably larger than `DRAIN_TIMEOUT`.
 
 ## Build systems
 
